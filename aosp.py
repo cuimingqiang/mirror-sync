@@ -67,11 +67,14 @@ def parse_local_aosp():
         mapping.close()
 
 
+# 1.解析gitlab仓库
+# 2.解析本地mirror
 def parse_aosp():
     parse_remote_aosp()
     parse_local_aosp()
 
 
+# 分析gitlab和本地mirror差异
 def diff_aosp():
     with open("aosp_remote.txt", "r") as mapping:
         remote_aosp_projects = json.loads(mapping.read())
@@ -106,6 +109,65 @@ def diff_aosp():
         mapping.close()
 
 
+def traverse_remote_aosp_group(root_group, aosp_groups):
+    if root_group is None:
+        return
+    subgroups = root_group.subgroups.list(all=True)
+    if subgroups is not None:
+        for subgroup in subgroups:
+            traverse_remote_aosp_group(gl.groups.get(subgroup.id), aosp_groups)
+            # print(subgroup)
+            aosp_groups[subgroup.full_path] = subgroup
+    
+
+def get_or_create_group(aosp_groups, group_root, group_path):
+    if aosp_groups.get(group_path) is not None:
+        return aosp_groups[group_path]
+    else:
+        sub_path = group_path[:group_path.rfind("/")]
+        group_name = group_path.split("/")[-1]
+        # print(group_path, sub_path, group_name)
+        parent_group = get_or_create_group(aosp_groups, group_root, sub_path)
+        if parent_group is not None:      
+            group = gl.groups.create({"name": group_name, "path": group_name, "parent_id": parent_group.id, "visibility": "public"})
+            aosp_groups[group.full_path] = group
+            # print(group)
+            return group
+        return group_root
+
+
+def create_gitlab_projects():
+    aosp_root = get_remote_aosp()
+    aosp_groups = {}
+    traverse_remote_aosp_group(aosp_root, aosp_groups)
+    aosp_groups[aosp_root.full_path] = aosp_root
+    # print(aosp_groups)
+    with open("git_remote.txt", "r") as mapping:
+        gitlab_projects = mapping.readlines()
+    for project in gitlab_projects:
+        project = project.strip()
+        if project == "":
+            continue
+        print(project)
+        # name = project.split("=")[0]
+        path = project.split("=")[1]
+        gitlab_path = path[len(ssh) + 1: len(path)]
+        gitlab_name = gitlab_path.split("/")[-1]
+     
+        gitlab_path = gitlab_path[:-len(gitlab_name) - 1]
+        gitlab_name = gitlab_name[:-4]
+
+        print(gitlab_name, gitlab_path)
+        group = get_or_create_group(aosp_groups, aosp_root, gitlab_path)
+        print(gitlab_name, gitlab_path, group.full_path, group.id)
+        try:
+            project = gl.projects.create({"name": gitlab_name, "namespace_id": group.id, "visibility": "public"})
+            print(project)
+        except Exception as e:
+            print(e)
+        
+
 if __name__ == "__main__":
     # parse_aosp()
-    diff_aosp()
+    # diff_aosp()
+    create_gitlab_projects()
